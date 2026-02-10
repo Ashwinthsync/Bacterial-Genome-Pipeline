@@ -1,4 +1,4 @@
-configfile: "config.yaml"
+configfile: "config.yml"
 
 SAMPLE = config["sample"]
 REF = config["reference"]["fasta"]
@@ -6,7 +6,7 @@ REF = config["reference"]["fasta"]
 rule all:
     input:
         "results/vcf/{sample}.filtered.vcf.gz".format(sample=SAMPLE),
-        "results/multiqc/multiqc_report.html"
+        "results/multiqc"
 
 # -----------------------------
 # Download FASTQ
@@ -15,11 +15,14 @@ rule download_fastq:
     output:
         r1 = "samples/{sample}_1.fastq",
         r2 = "samples/{sample}_2.fastq"
+    log:
+        "logs/download_fastq/{sample}.log"
     shell:
         """
+        mkdir -p logs/download_fastq
         wget -O {output.r1}.gz https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR258/004/{wildcards.sample}/{wildcards.sample}_1.fastq.gz
         wget -O {output.r2}.gz https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR258/004/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
-        gunzip -f {output.r1}.gz {output.r2}.gz
+        gunzip -f {output.r1}.gz {output.r2}.gz &> {log}
         """
 
 # -----------------------------
@@ -28,20 +31,29 @@ rule download_fastq:
 rule download_reference:
     output:
         REF
+    log:
+        "logs/reference_download.log"
     shell:
         """
-        mkdir -p ref_genome
+        mkdir -p ref_genome logs
         wget -O {output}.gz {config[reference][url]}
-        gunzip -f {output}.gz
+        gunzip -f {output}.gz &> {log}
         """
 
 rule bwa_index:
     input:
         REF
     output:
-        REF + ".bwt"
+        amb = REF + ".amb",
+        ann = REF + ".ann",
+        bwt = REF + ".bwt",
+        pac = REF + ".pac",
+        sa  = REF + ".sa"
+    threads: config["threads"]
+    log:
+        "logs/bwa_index.log"
     shell:
-        "bwa index {input}"
+        "bwa index {input} &> {log}"
 
 # -----------------------------
 # FastQC
@@ -53,8 +65,13 @@ rule fastqc:
     output:
         directory("results/fastqc")
     threads: config["threads"]
+    log:
+        "logs/fastqc.log"
     shell:
-        "fastqc -t {threads} -o {output} {input.r1} {input.r2}"
+        """
+        mkdir -p results/fastqc logs
+        fastqc -t {threads} -o {output} {input.r1} {input.r2}  &> {log}
+        """
 
 # -----------------------------
 # Trimming
@@ -67,13 +84,16 @@ rule trim_reads:
         r1 = "results/trimmed/{sample}_1.trim.fastq",
         r2 = "results/trimmed/{sample}_2.trim.fastq"
     threads: config["threads"]
+    log:
+        "logs/trimmomatic/{sample}.log"
     shell:
         """
+        mkdir -p logs/trimmomatic
         trimmomatic PE -threads {threads} \
         {input.r1} {input.r2} \
         {output.r1} /dev/null \
         {output.r2} /dev/null \
-        SLIDINGWINDOW:4:20
+        SLIDINGWINDOW:4:20  &> {log}
         """
 
 # -----------------------------
@@ -81,15 +101,19 @@ rule trim_reads:
 # -----------------------------
 rule bwa_mem:
     input:
-        REF,
+        ref = REF,
+        idx = rules.bwa_index.output,
         r1 = "results/trimmed/{sample}_1.trim.fastq",
         r2 = "results/trimmed/{sample}_2.trim.fastq"
     output:
         "results/bam/{sample}.sorted.bam"
     threads: config["threads"]
+    log:
+        "logs/bwa_mem/{sample}.log"
     shell:
         """
-        bwa mem -t {threads} {input[0]} {input.r1} {input.r2} |
+        mkdir -p results/bam logs/bwa_mem
+        bwa mem -t {threads} {input[0]} {input.r1} {input.r2} 2>> {log} |
         samtools sort -o {output}
         """
 
@@ -98,8 +122,29 @@ rule bam_index:
         "results/bam/{sample}.sorted.bam"
     output:
         "results/bam/{sample}.sorted.bam.bai"
+    log:
+        "logs/bam_index/{sample}.log"
     shell:
-        "samtools index {input}"
+        """
+        mkdir -p logs/bam_index
+        samtools index {input} >> {log} 2>&1
+        """
+
+# -----------------------------
+# Alignment QC (flagstat)
+# -----------------------------
+rule flagstat:
+    input:
+        "results/bam/{sample}.sorted.bam"
+    output:
+        "results/bam/{sample}.flagstat.txt"
+    log:
+        "logs/flagstat/{sample}.log"
+    shell:
+        """
+        mkdir -p logs/flagstat
+        samtools flagstat {input} > {output} 2> {log}
+        """
 
 # -----------------------------
 # Variant Calling
@@ -110,16 +155,20 @@ rule mpileup:
         ref = REF
     output:
         "results/bam/{sample}.bcf"
+    log:
+        "logs/bcftools_mpileup/{sample}.log"
     shell:
-        "bcftools mpileup -O b -f {input.ref} {input.bam} -o {output}"
+        "bcftools mpileup -O b -f {input.ref} {input.bam} -o {output} >> {log} 2>&1"
 
 rule call_variants:
     input:
         "results/bam/{sample}.bcf"
     output:
         "results/vcf/{sample}.vcf"
+    log:
+        "logs/bcftools_call/{sample}.log"
     shell:
-        "bcftools call --ploidy 1 -m -v -o {output} {input}"
+        "bcftools call --ploidy 1 -m -v -o {output} {input} >> {log} 2>&1"
 
 # -----------------------------
 # Variant Filtering
@@ -129,11 +178,13 @@ rule filter_variants:
         "results/vcf/{sample}.vcf"
     output:
         "results/vcf/{sample}.filtered.vcf.gz"
+    log:
+        "logs/variant_filter/{sample}.log"
     shell:
         """
         bcftools filter -i 'QUAL>30 && DP>10' {input} |
         bgzip -c > {output}
-        tabix -p vcf {output}
+        tabix -p vcf {output} >> {log} 2>&1
         """
 
 # -----------------------------
@@ -141,8 +192,11 @@ rule filter_variants:
 # -----------------------------
 rule multiqc:
     input:
-        "results/fastqc"
+        fastqc = directory("results/fastqc"),
+        flagstat = expand("results/bam/{sample}.flagstat.txt", sample=[SAMPLE])
     output:
         directory("results/multiqc")
+    log:
+        "logs/multiqc.log"
     shell:
-        "multiqc {input} -o {output}"
+        "multiqc {input} -o {output} >> {log} 2>&1"

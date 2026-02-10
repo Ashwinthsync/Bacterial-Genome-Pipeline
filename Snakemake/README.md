@@ -10,4 +10,13 @@ using Snakemake.
 
 ### Usage
 ```bash
+#To get dag.png image :
+conda install -y graphviz
+snakemake --dag | dot -Tpng > results/dag.png
+
+#To dryrun Snakefile, run :
+snakemake -n
+
+#To run Snakefile, run :
 snakemake --cores 4
+---
