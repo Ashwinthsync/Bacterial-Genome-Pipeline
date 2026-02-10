@@ -1,0 +1,12 @@
+.vscode/
+
+#Bash Outputs
+Bash/ref_genome
+Bash/results
+Bash/samples
+
+#Snakemake Outputs
+Snakemake/ref_genome
+Snakemake/results
+Snakemake/samples
+

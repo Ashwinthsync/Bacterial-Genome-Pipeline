@@ -1,0 +1,14 @@
+# This is an environment file for setting up a conda environment for an NGS pipeline.
+
+name: ngs_pipeline # Name of the conda environment
+channels: # Channels to search for packages
+  - bioconda
+  - conda-forge
+dependencies: # List of packages to install in the environment
+  - fastqc
+  - trimmomatic
+  - bwa
+  - samtools
+  - bcftools
+  - multiqc
+  - snakemake

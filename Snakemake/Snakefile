@@ -1,0 +1,148 @@
+configfile: "config.yaml"
+
+SAMPLE = config["sample"]
+REF = config["reference"]["fasta"]
+
+rule all:
+    input:
+        "results/vcf/{sample}.filtered.vcf.gz".format(sample=SAMPLE),
+        "results/multiqc/multiqc_report.html"
+
+# -----------------------------
+# Download FASTQ
+# -----------------------------
+rule download_fastq:
+    output:
+        r1 = "samples/{sample}_1.fastq",
+        r2 = "samples/{sample}_2.fastq"
+    shell:
+        """
+        wget -O {output.r1}.gz https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR258/004/{wildcards.sample}/{wildcards.sample}_1.fastq.gz
+        wget -O {output.r2}.gz https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR258/004/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
+        gunzip -f {output.r1}.gz {output.r2}.gz
+        """
+
+# -----------------------------
+# Download reference genome
+# -----------------------------
+rule download_reference:
+    output:
+        REF
+    shell:
+        """
+        mkdir -p ref_genome
+        wget -O {output}.gz {config[reference][url]}
+        gunzip -f {output}.gz
+        """
+
+rule bwa_index:
+    input:
+        REF
+    output:
+        REF + ".bwt"
+    shell:
+        "bwa index {input}"
+
+# -----------------------------
+# FastQC
+# -----------------------------
+rule fastqc:
+    input:
+        r1 = config["fastq"]["r1"],
+        r2 = config["fastq"]["r2"]
+    output:
+        directory("results/fastqc")
+    threads: config["threads"]
+    shell:
+        "fastqc -t {threads} -o {output} {input.r1} {input.r2}"
+
+# -----------------------------
+# Trimming
+# -----------------------------
+rule trim_reads:
+    input:
+        r1 = config["fastq"]["r1"],
+        r2 = config["fastq"]["r2"]
+    output:
+        r1 = "results/trimmed/{sample}_1.trim.fastq",
+        r2 = "results/trimmed/{sample}_2.trim.fastq"
+    threads: config["threads"]
+    shell:
+        """
+        trimmomatic PE -threads {threads} \
+        {input.r1} {input.r2} \
+        {output.r1} /dev/null \
+        {output.r2} /dev/null \
+        SLIDINGWINDOW:4:20
+        """
+
+# -----------------------------
+# Alignment
+# -----------------------------
+rule bwa_mem:
+    input:
+        REF,
+        r1 = "results/trimmed/{sample}_1.trim.fastq",
+        r2 = "results/trimmed/{sample}_2.trim.fastq"
+    output:
+        "results/bam/{sample}.sorted.bam"
+    threads: config["threads"]
+    shell:
+        """
+        bwa mem -t {threads} {input[0]} {input.r1} {input.r2} |
+        samtools sort -o {output}
+        """
+
+rule bam_index:
+    input:
+        "results/bam/{sample}.sorted.bam"
+    output:
+        "results/bam/{sample}.sorted.bam.bai"
+    shell:
+        "samtools index {input}"
+
+# -----------------------------
+# Variant Calling
+# -----------------------------
+rule mpileup:
+    input:
+        bam = "results/bam/{sample}.sorted.bam",
+        ref = REF
+    output:
+        "results/bam/{sample}.bcf"
+    shell:
+        "bcftools mpileup -O b -f {input.ref} {input.bam} -o {output}"
+
+rule call_variants:
+    input:
+        "results/bam/{sample}.bcf"
+    output:
+        "results/vcf/{sample}.vcf"
+    shell:
+        "bcftools call --ploidy 1 -m -v -o {output} {input}"
+
+# -----------------------------
+# Variant Filtering
+# -----------------------------
+rule filter_variants:
+    input:
+        "results/vcf/{sample}.vcf"
+    output:
+        "results/vcf/{sample}.filtered.vcf.gz"
+    shell:
+        """
+        bcftools filter -i 'QUAL>30 && DP>10' {input} |
+        bgzip -c > {output}
+        tabix -p vcf {output}
+        """
+
+# -----------------------------
+# MultiQC
+# -----------------------------
+rule multiqc:
+    input:
+        "results/fastqc"
+    output:
+        directory("results/multiqc")
+    shell:
+        "multiqc {input} -o {output}"

@@ -1,0 +1,11 @@
+sample: SRR2589044
+
+threads: 4
+
+reference:
+  url: https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/017/985/GCA_000017985.1_ASM1798v1/GCA_000017985.1_ASM1798v1_genomic.fna.gz
+  fasta: ref_genome/ecoli_rel606.fasta
+
+fastq:
+  r1: samples/SRR2589044_1.fastq
+  r2: samples/SRR2589044_2.fastq
