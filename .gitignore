@@ -9,4 +9,6 @@ Bash/samples
 Snakemake/ref_genome
 Snakemake/results
 Snakemake/samples
+Snakemake/logs
+Snakemake/.snakemake
 
